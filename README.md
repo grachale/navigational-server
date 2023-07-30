@@ -69,53 +69,13 @@ The resulting server confirmation code is sent to the client as text in the SERV
 
 (40784 + 32037) % 65536 = 7285
 
-The client sends its confirmation code to the server in the CLIENT_CONFIRMATION message, and the server calculates the hash back from it and compares it with the original hash of the username. If both values match, the server sends the SERVER_OK message; otherwise, it responds with the SERVER_LOGIN_FAILED message and terminates the connection. The entire sequence is shown in the following diagram:
-
-Client Server
-​------------------------------------------
-CLIENT_USERNAME --->
-<--- SERVER_KEY_REQUEST
-CLIENT_KEY_ID --->
-<--- SERVER_CONFIRMATION
-CLIENT_CONFIRMATION --->
-<--- SERVER_OK
-or
-SERVER_LOGIN_FAILED
-.
-.
-.
+The client sends its confirmation code to the server in the CLIENT_CONFIRMATION message, and the server calculates the hash back from it and compares it with the original hash of the username. If both values match, the server sends the SERVER_OK message; otherwise, it responds with the SERVER_LOGIN_FAILED message and terminates the connection. 
 
 The server does not know the usernames in advance. Therefore, robots can choose any username, but they must know the sets of both client and server keys. The key pairs ensure mutual authentication and prevent the authentication process from being compromised by simple eavesdropping.
 
 ### Robot Movement towards the Goal
 
 The robot can only move forward (SERVER_MOVE) and can perform a 90-degree turn to the right (SERVER_TURN_RIGHT) or left (SERVER_TURN_LEFT) in place. After each movement command, it sends a confirmation (CLIENT_OK) message, including its current coordinates. The server does not know the robot's initial position at the beginning of communication. Therefore, the server must determine the robot's position (position and direction) only from its responses. To prevent infinite wandering of the robot in space, each robot has a limited number of movements (only forward steps). The number of movements should be sufficient for the robot to move reasonably toward the goal. The communication example follows. The server first moves the robot forward twice to detect its current state and then guides it towards the target coordinates [0,0].
-
-Client Server
-​------------------------------------------
-.
-.
-.
-<--- SERVER_MOVE
-or
-SERVER_TURN_LEFT
-or
-SERVER_TURN_RIGHT
-CLIENT_OK --->
-<--- SERVER_MOVE
-or
-SERVER_TURN_LEFT
-or
-SERVER_TURN_RIGHT
-CLIENT_OK --->
-<--- SERVER_MOVE
-or
-SERVER_TURN_LEFT
-or
-SERVER_TURN_RIGHT
-.
-.
-.
 
 Immediately after authentication, the robot expects at least one movement command - SERVER_MOVE, SERVER_TURN_LEFT, or SERVER_TURN_RIGHT! It is not possible to try to pick up the secret during the first attempt. There are many obstacles on the way to the goal that robots must bypass. The following rules apply to obstacles:
 
@@ -127,36 +87,47 @@ The obstacle is detected when the robot receives a forward movement command (SER
 
 ### Picking Up the Secret Message
 
-After the robot reaches the target coordinates [0,0], it attempts to pick up the secret message (SERVER_PICK_UP message). If the robot is asked to pick up the message and is not at the target coordinates, it initiates self-destruction, and the communication with the server is terminated. When attempting to pick up the message at the target coordinates, the robot responds with the CLIENT_MESSAGE message. The server must respond to this message with the SERVER_LOGOUT message. (It is guaranteed that the secret message never matches the CLIENT_RECHARGING message. If the server receives this message after a request to pick up the message, it is always related to recharging.) After that, both the client and the server terminate the connection. Communication example with message pickup follows:
-
-Client Server
-​------------------------------------------
-.
-.
-.
-<--- SERVER_PICK_UP
-CLIENT_MESSAGE --->
-<--- SERVER_LOGOUT
+After the robot reaches the target coordinates [0,0], it attempts to pick up the secret message (SERVER_PICK_UP message). If the robot is asked to pick up the message and is not at the target coordinates, it initiates self-destruction, and the communication with the server is terminated. When attempting to pick up the message at the target coordinates, the robot responds with the CLIENT_MESSAGE message. The server must respond to this message with the SERVER_LOGOUT message. (It is guaranteed that the secret message never matches the CLIENT_RECHARGING message. If the server receives this message after a request to pick up the message, it is always related to recharging.) After that, both the client and the server terminate the connection.
 
 ### Charging
 
 Each of the robots has a limited energy source. If the battery starts running out, the robot notifies the server and then starts recharging itself from the solar panel. During recharging, it does not respond to any messages. After recharging is complete, it informs the server and resumes its activity from where it left off before recharging. If the robot does not end the recharging within the TIMEOUT_RECHARGING time interval, the server terminates the connection.
 
-Client Server
-​------------------------------------------
-CLIENT_USERNAME --->
-<--- SERVER_CONFIRMATION
-CLIENT_RECHARGING --->
 
-Copy code
-  ...
-CLIENT_FULL_POWER --->
-CLIENT_OK --->
-<--- SERVER_OK
-or
-SERVER_LOGIN_FAILED
-.
-.
-.
+## Error situations
 
-Another example:
+Some robots may have damaged firmware, which may cause communication issues. The server should detect this inappropriate behavior and respond correctly.
+
+### Authentication Errors
+
+If the CLIENT_KEY_ID message contains a Key ID that is outside the expected range (i.e., a number that is not between 0-4), the server responds with an error message SERVER_KEY_OUT_OF_RANGE_ERROR and terminates the connection. Negative values are also considered numbers for simplicity. If the CLIENT_KEY_ID message does not contain a number (e.g., letters), the server responds with an error SERVER_SYNTAX_ERROR.
+
+If the CLIENT_CONFIRMATION message contains a numerical value (including negative numbers) that does not match the expected confirmation code, the server sends the SERVER_LOGIN_FAILED message and terminates the connection. If the message does not contain a purely numerical value, the server sends the SERVER_SYNTAX_ERROR message and terminates the connection.
+
+### Syntax Error
+
+The server immediately responds to a syntax error as soon as it detects it in a received message. The server sends the robot the SERVER_SYNTAX_ERROR message and must terminate the connection as soon as possible. Syntactically incorrect messages include:
+
+Incoming message longer than the number of characters defined for each message (including termination characters \a\b). Message lengths are defined in the table with an overview of messages from the client.
+Incoming message that does not syntactically match any of the CLIENT_USERNAME, CLIENT_KEY_ID, CLIENT_CONFIRMATION, CLIENT_OK, CLIENT_RECHARGING, and CLIENT_FULL_POWER messages.
+Each incoming message is tested for its maximum size, and only the CLIENT_CONFIRMATION, CLIENT_OK, CLIENT_RECHARGING, and CLIENT_FULL_POWER messages are tested for their content (CLIENT_USERNAME and CLIENT_MESSAGE messages can contain anything).
+Logical Error
+
+A logical error occurs only during charging - when the robot sends information about recharging (CLIENT_RECHARGING) and then sends any message other than CLIENT_FULL_POWER, or if it sends the CLIENT_FULL_POWER message without previously sending CLIENT_RECHARGING. The server responds to such situations by sending the SERVER_LOGIC_ERROR message and immediately terminating the connection.
+
+### Timeout
+
+The communication protocol with robots includes two types of timeouts:
+
+TIMEOUT - communication timeout. If the robot or server does not receive any communication (it does not have to be a complete message) from its counterpart within this time interval, they consider the connection lost and immediately terminate it.
+TIMEOUT_RECHARGING - timeout for robot recharging. After the server receives the CLIENT_RECHARGING message, the robot must send the CLIENT_FULL_POWER message no later than within this time interval. If the robot fails to do so, the server must terminate the connection immediately.
+
+### Special Situations
+
+In communication through a more complicated network infrastructure, two situations may occur:
+
+The message may arrive divided into several parts, which are read from the socket sequentially. (This occurs due to segmentation and possible delays of some segments in the network.)
+Messages sent close to each other may arrive almost simultaneously. Both may be read in one read from the socket. (This happens when the server fails to read the first message from the buffer before the second message arrives.)
+Using a direct connection between the server and the robots in combination with powerful hardware naturally prevents these situations from occurring, so they are artificially created by the tester. In some tests, both situations are combined.
+
+Every properly implemented server should be able to handle this situation. Robot firmwares take this fact into account and may even exploit it. If the protocol includes a situation where the messages from the robot have a predetermined order, they are sent together in this order. This allows the probes to reduce their consumption and simplifies the protocol implementation from their perspective.
