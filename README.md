@@ -41,3 +41,122 @@ Communication between the server and robots is fully realized using a text-based
 
 
 Communication with robots can be divided into several phases: 
+
+### Authentication
+
+Both the server and the client are aware of five pairs of authentication keys (these are not public and private keys):
+| Key ID | Server Key | Client Key |
+|--------|------------|------------|
+| 0      | 23019      | 32037      |
+| 1      | 32037      | 29295      |
+| 2      | 18789      | 13603      |
+| 3      | 16443      | 29533      |
+| 4      | 18189      | 21952      |
+
+Each robot starts communication by sending its username (CLIENT_USERNAME message). The username can be any sequence of 18 characters, except for the termination sequence "\a\b". In the next step, the server prompts the client to send the Key ID (SERVER_KEY_REQUEST message), which is essentially the identifier of the key pair it wants to use for authentication. The client responds with the CLIENT_KEY_ID message, in which it sends the Key ID. After that, the server knows the correct key pair, so it can calculate the "hash" code from the username using the following formula:
+
+Username: Mnau!
+
+ASCII representation: 77 110 97 117 33
+
+Resulting hash: ((77 + 110 + 97 + 117 + 33) * 1000) % 65536 = 40784
+
+The resulting hash is a 16-bit decimal number. The server then adds its server key to the hash, and if the value overflows the 16-bit capacity, the value simply wraps around (the example below shows Key ID 0):
+
+(40784 + 23019) % 65536 = 63803
+
+The resulting server confirmation code is sent to the client as text in the SERVER_CONFIRM message. The client calculates the hash back from the received code and compares it with the expected hash, which it calculated from the username. If they match, the client creates its own confirmation code. The calculation of the client's confirmation code is similar to the server's, but it uses the client key (the example below shows Key ID 0):
+
+(40784 + 32037) % 65536 = 7285
+
+The client sends its confirmation code to the server in the CLIENT_CONFIRMATION message, and the server calculates the hash back from it and compares it with the original hash of the username. If both values match, the server sends the SERVER_OK message; otherwise, it responds with the SERVER_LOGIN_FAILED message and terminates the connection. The entire sequence is shown in the following diagram:
+
+Client Server
+​------------------------------------------
+CLIENT_USERNAME --->
+<--- SERVER_KEY_REQUEST
+CLIENT_KEY_ID --->
+<--- SERVER_CONFIRMATION
+CLIENT_CONFIRMATION --->
+<--- SERVER_OK
+or
+SERVER_LOGIN_FAILED
+.
+.
+.
+
+The server does not know the usernames in advance. Therefore, robots can choose any username, but they must know the sets of both client and server keys. The key pairs ensure mutual authentication and prevent the authentication process from being compromised by simple eavesdropping.
+
+### Robot Movement towards the Goal
+
+The robot can only move forward (SERVER_MOVE) and can perform a 90-degree turn to the right (SERVER_TURN_RIGHT) or left (SERVER_TURN_LEFT) in place. After each movement command, it sends a confirmation (CLIENT_OK) message, including its current coordinates. The server does not know the robot's initial position at the beginning of communication. Therefore, the server must determine the robot's position (position and direction) only from its responses. To prevent infinite wandering of the robot in space, each robot has a limited number of movements (only forward steps). The number of movements should be sufficient for the robot to move reasonably toward the goal. The communication example follows. The server first moves the robot forward twice to detect its current state and then guides it towards the target coordinates [0,0].
+
+Client Server
+​------------------------------------------
+.
+.
+.
+<--- SERVER_MOVE
+or
+SERVER_TURN_LEFT
+or
+SERVER_TURN_RIGHT
+CLIENT_OK --->
+<--- SERVER_MOVE
+or
+SERVER_TURN_LEFT
+or
+SERVER_TURN_RIGHT
+CLIENT_OK --->
+<--- SERVER_MOVE
+or
+SERVER_TURN_LEFT
+or
+SERVER_TURN_RIGHT
+.
+.
+.
+
+Immediately after authentication, the robot expects at least one movement command - SERVER_MOVE, SERVER_TURN_LEFT, or SERVER_TURN_RIGHT! It is not possible to try to pick up the secret during the first attempt. There are many obstacles on the way to the goal that robots must bypass. The following rules apply to obstacles:
+
+An obstacle occupies a single coordinate.
+It is guaranteed that each obstacle has all eight surrounding coordinates free (so it can always be easily bypassed).
+It is guaranteed that the obstacle never occupies the coordinate [0,0].
+If the robot hits an obstacle more than twenty times, it becomes damaged, and the connection is terminated.
+The obstacle is detected when the robot receives a forward movement command (SERVER_MOVE), but there is no change in coordinates (the CLIENT_OK message contains the same coordinates as in the previous step). If the movement is not executed, the remaining steps of the robot are not decremented.
+
+### Picking Up the Secret Message
+
+After the robot reaches the target coordinates [0,0], it attempts to pick up the secret message (SERVER_PICK_UP message). If the robot is asked to pick up the message and is not at the target coordinates, it initiates self-destruction, and the communication with the server is terminated. When attempting to pick up the message at the target coordinates, the robot responds with the CLIENT_MESSAGE message. The server must respond to this message with the SERVER_LOGOUT message. (It is guaranteed that the secret message never matches the CLIENT_RECHARGING message. If the server receives this message after a request to pick up the message, it is always related to recharging.) After that, both the client and the server terminate the connection. Communication example with message pickup follows:
+
+Client Server
+​------------------------------------------
+.
+.
+.
+<--- SERVER_PICK_UP
+CLIENT_MESSAGE --->
+<--- SERVER_LOGOUT
+
+### Charging
+
+Each of the robots has a limited energy source. If the battery starts running out, the robot notifies the server and then starts recharging itself from the solar panel. During recharging, it does not respond to any messages. After recharging is complete, it informs the server and resumes its activity from where it left off before recharging. If the robot does not end the recharging within the TIMEOUT_RECHARGING time interval, the server terminates the connection.
+
+Client Server
+​------------------------------------------
+CLIENT_USERNAME --->
+<--- SERVER_CONFIRMATION
+CLIENT_RECHARGING --->
+
+Copy code
+  ...
+CLIENT_FULL_POWER --->
+CLIENT_OK --->
+<--- SERVER_OK
+or
+SERVER_LOGIN_FAILED
+.
+.
+.
+
+Another example:
