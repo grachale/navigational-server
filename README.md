@@ -1,4 +1,5 @@
 # Multithreaded server in C++
+
 This repository contains an autonomous robot control server written in c++ designed to remotely manage a fleet of robots. The robots are capable of independently connecting to the server, which then guides them towards the center of a coordinate system. As part of the testing process, each robot starts at random coordinates and attempts to reach the target coordinates [0,0]. Upon reaching the destination, the robot must retrieve a valuable secret.
 
 ## Detailed Specification
